@@ -10,10 +10,37 @@ env:
   APP_NAME: Hành Trình Anh Hùng
 
 jobs:
-  android:
+  # BƯỚC 1: build lõi Rust -> WebAssembly, chạy test đối chiếu công thức JS gốc
+  wasm:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Cài Rust + target wasm32
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add wasm32-unknown-unknown
+      - name: Test lõi Rust (đối chiếu JS gốc)
+        working-directory: rust
+        run: cargo test --release
+      - name: Build WASM
+        working-directory: rust
+        run: |
+          cargo build --release --target wasm32-unknown-unknown -p htha-core
+          cp target/wasm32-unknown-unknown/release/htha_core.wasm ../htha_core.wasm
+          ls -la ../htha_core.wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: htha-core-wasm
+          path: htha_core.wasm
+
+  android:
+    needs: wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: htha-core-wasm
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -23,7 +50,7 @@ jobs:
           java-version: 21
       - name: Tạo project Capacitor
         run: |
-          mkdir www && cp index.html www/index.html
+          mkdir www && cp index.html www/index.html && cp htha_core.wasm www/htha_core.wasm
           python3 - <<'PY'
           import re
           p = "www/index.html"
@@ -186,15 +213,19 @@ jobs:
           path: android/app/build/outputs/apk/debug/app-debug.apk
 
   ios:
+    needs: wasm
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: htha-core-wasm
       - uses: actions/setup-node@v4
         with:
           node-version: 20
       - name: Tạo project Capacitor
         run: |
-          mkdir www && cp index.html www/index.html
+          mkdir www && cp index.html www/index.html && cp htha_core.wasm www/htha_core.wasm
           python3 - <<'PY'
           import re
           p = "www/index.html"
