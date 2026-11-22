@@ -5,3 +5,5 @@ ios/
 *.keystore
 *.jks
 .env
+rust/target/
+htha_core.wasm

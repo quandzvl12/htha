@@ -1,0 +1,9 @@
+[package]
+name = "htha-core"
+version = "0.1.0"
+edition = "2021"
+description = "Hành Trình Anh Hùng - lõi logic game bằng Rust (bước 1: công thức cân bằng)"
+
+[lib]
+# cdylib -> htha_core.wasm cho WebView; rlib -> test native + dùng lại ở các bước sau
+crate-type = ["cdylib", "rlib"]

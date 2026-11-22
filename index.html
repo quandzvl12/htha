@@ -1,6 +1,74 @@
 <!doctype html>
 <html lang="vi">
 <head>
+<script>/* ===== HTHA CORE — lõi Rust/WASM (BƯỚC 1: công thức cân bằng) =====
+   Game luôn chạy được: ban đầu dùng bản JS dự phòng; khi htha_core.wasm tải xong VÀ
+   khớp bản JS trên các giá trị mẫu thì tự chuyển sang Rust. Lệch → giữ JS và báo ở console. */
+const Core=(()=>{
+  const js={
+    enemyHpMult:s=>Math.max(1,0.1244*Math.pow(s,1.2144)),
+    enemyDmgMult:s=>Math.max(1,0.2093*Math.pow(s,1.4806)),
+    bossHpMult:(s,b)=>b?Math.max(.0001,7.75*Math.pow(s,-0.811)):1,
+    bossDmgMult:(s,b)=>b?Math.max(.0001,4.199*Math.pow(s,-0.364)):1,
+    goldPerKill:s=>30*(1+s*0.005),
+    sellValue:(s,m,e)=>Math.round(300*(1+s*0.02)*Math.pow(m,0.9)*(1+e*0.25)),
+    upgradeCost:(k,lv)=>Math.max(1,Math.round(20*Math.pow(1.2,lv))),
+    skillValue:(b,t)=>Math.max(1,Math.round(b*t*0.6)),
+    dungeonOfStage:s=>Math.min(300,Math.max(1,Math.ceil(s/10))),
+    floorOfStage:s=>(s-1)%10+1,
+    rankIndex:d=>d===1?0:d<=20?1:d<=60?2:d<=120?3:d<=180?4:d<=240?5:d<=280?6:7,
+    regionIndex:(d,rl,al)=>d===1?-1:Math.floor((d-2)/al)%rl,
+    aspectIndex:(d,al)=>d===1?-1:(d-2)%al
+  };
+  const KIND={power:0,speed:1,health:2};
+  const api=Object.assign({backend:"js"},js);
+  function wrap(x){
+    return {
+      enemyHpMult:s=>x.enemy_hp_mult(s),
+      enemyDmgMult:s=>x.enemy_dmg_mult(s),
+      bossHpMult:(s,b)=>x.boss_hp_mult(s,b?1:0),
+      bossDmgMult:(s,b)=>x.boss_dmg_mult(s,b?1:0),
+      goldPerKill:s=>x.gold_per_kill(s),
+      sellValue:(s,m,e)=>x.sell_value(s,m,e),
+      upgradeCost:(k,lv)=>x.upgrade_cost(typeof k==="number"?k:(KIND[k]|0),lv),
+      skillValue:(b,t)=>x.skill_value(b,t),
+      dungeonOfStage:s=>x.dungeon_of_stage(s),
+      floorOfStage:s=>x.floor_of_stage(s),
+      rankIndex:d=>x.rank_index(d),
+      regionIndex:(d,rl,al)=>x.region_index(d,rl,al),
+      aspectIndex:(d,al)=>x.aspect_index(d,al)
+    };
+  }
+  function same(a,b){return a===b||Math.abs(a-b)<=1e-9*Math.max(1,Math.abs(b))}
+  function parity(w){
+    const S=[1,2,7,10,11,55,100,101,333,1000,2500,3000],R=[1,2.4,5,10,20];
+    for(const s of S){
+      if(!same(w.enemyHpMult(s),js.enemyHpMult(s))||!same(w.enemyDmgMult(s),js.enemyDmgMult(s))||
+         !same(w.bossHpMult(s,true),js.bossHpMult(s,true))||!same(w.bossDmgMult(s,true),js.bossDmgMult(s,true))||
+         !same(w.goldPerKill(s),js.goldPerKill(s))||w.dungeonOfStage(s)!==js.dungeonOfStage(s)||
+         w.floorOfStage(s)!==js.floorOfStage(s))return false;
+      for(const r of R)for(const e of [0,2])if(w.sellValue(s,r,e)!==js.sellValue(s,r,e))return false;
+    }
+    for(let lv=0;lv<60;lv+=7)if(w.upgradeCost("power",lv)!==js.upgradeCost("power",lv))return false;
+    for(const b of [3,10,25.5,100])for(const t of [1,1.15,2.35])if(w.skillValue(b,t)!==js.skillValue(b,t))return false;
+    for(let d=1;d<=300;d+=13)
+      if(w.rankIndex(d)!==js.rankIndex(d)||w.regionIndex(d,20,16)!==js.regionIndex(d,20,16)||w.aspectIndex(d,16)!==js.aspectIndex(d,16))return false;
+    return true;
+  }
+  try{
+    if(typeof WebAssembly==="object"&&typeof fetch==="function"){
+      fetch("htha_core.wasm").then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.arrayBuffer()})
+        .then(buf=>WebAssembly.instantiate(buf,{}))
+        .then(({instance})=>{
+          const w=wrap(instance.exports);
+          if(parity(w)){Object.assign(api,w);api.backend="rust-wasm";console.info("[HTHA] lõi Rust/WASM đang chạy")}
+          else console.warn("[HTHA] WASM lệch bản JS — giữ JS")
+        }).catch(e=>console.info("[HTHA] dùng bản JS (không có WASM):",e&&e.message))
+    }
+  }catch(e){}
+  return api;
+})();
+</script>
 <script>
 /* HTAH-DURABLE: sao lưu localStorage -> IndexedDB ngay khi ghi. localStorage của WebView ghi xuống đĩa trễ vài giây,
    nếu app bị tắt đột ngột thì mất; IndexedDB ghi xuống ngay. Khi mở lại, nếu bản IndexedDB mới hơn thì tự khôi phục. */
@@ -1190,9 +1258,9 @@
    const MAX_DUNGEONS=300,STAGES_PER_DUNGEON=10,MAX_STAGES=MAX_DUNGEONS*STAGES_PER_DUNGEON;
    const DUNGEON_REGIONS=["Rừng Cấm","Hầm Mộ","Hang Băng","Tháp Lửa","Vực Sâu","Pháo Đài","Sa Mạc Đỏ","Đầm Lầy","Cổng Hư Không","Điện Thờ","Mê Cung","Thành Phố Đổ Nát","Núi Tàn Tích","Đảo Sương","Biển Đen","Thung Lũng","Rạn Pha Lê","Hoang Mạc","Linh Sơn","Chiến Trường"];
    const DUNGEON_ASPECTS=["Huyết Nguyệt","Bóng Tối","Tro Tàn","Lôi Đình","Sương Giá","Hỏa Diệm","Hư Vô","Phong Ấn","Thần Thú","Linh Hồn","Cổ Long","Ma Vương","Vạn Kiếp","Hắc Nhật","Tinh Vân","Vĩnh Hằng"];
-   function dungeonName(number){if(number===1)return"Dungeon Tân Thủ";const index=number-2;return"Dungeon "+DUNGEON_REGIONS[Math.floor(index/DUNGEON_ASPECTS.length)%DUNGEON_REGIONS.length]+" "+DUNGEON_ASPECTS[index%DUNGEON_ASPECTS.length]}
-   function dungeonRank(number){if(number===1)return"Tân Thủ";if(number<=20)return"Đồng";if(number<=60)return"Bạc";if(number<=120)return"Vàng";if(number<=180)return"Kim Cương";if(number<=240)return"Huyền Thoại";if(number<=280)return"Thần Thoại";return"Huỷ Diệt"}
-   function currentStageName(){const dungeon=Math.min(MAX_DUNGEONS,Math.max(1,Math.ceil(stage/STAGES_PER_DUNGEON))),floor=(stage-1)%STAGES_PER_DUNGEON+1;return dungeonName(dungeon)+" • Ải "+floor+"/"+STAGES_PER_DUNGEON+" • Bậc "+dungeonRank(dungeon)}
+   function dungeonName(number){if(number===1)return"Dungeon Tân Thủ";return"Dungeon "+DUNGEON_REGIONS[Core.regionIndex(number,DUNGEON_REGIONS.length,DUNGEON_ASPECTS.length)]+" "+DUNGEON_ASPECTS[Core.aspectIndex(number,DUNGEON_ASPECTS.length)]}
+   const DUNGEON_RANKS=["Tân Thủ","Đồng","Bạc","Vàng","Kim Cương","Huyền Thoại","Thần Thoại","Huỷ Diệt"];function dungeonRank(number){return DUNGEON_RANKS[Core.rankIndex(number)]}
+   function currentStageName(){const dungeon=Core.dungeonOfStage(stage),floor=Core.floorOfStage(stage);return dungeonName(dungeon)+" • Ải "+floor+"/"+STAGES_PER_DUNGEON+" • Bậc "+dungeonRank(dungeon)}
   const enemyProfiles={
     duc:{name:"Đức",r:15,hp:38,speed:48,damage:7,rate:1700,color:"#e9dfd2"},
     tayhung:{name:"Tày Hùng",r:23,hp:118,speed:32,damage:15,rate:2100,color:"#d49d50"},
@@ -1724,8 +1792,8 @@
   }
   function gearPercentValue(item,kind){if(!item)return 0;ensureEquipmentPercentStats(item);return Math.max(0,Number(kind==="weapon"?item.dmgPct:item.hpPct)||0)}
   function percentText(v){return(Math.max(0,Number(v)||0)*100).toFixed(1).replace(/\.0$/ ,"")+"%"}
-  function genWeapon(tier,stageRef){const r=RARITIES[tier],base=8+Math.floor((stageRef||1)*.6),dmg=Math.round(base*r.mult*(1+Math.random()*.3)),value=Math.max(5,Math.round(BAL.sellBase*(1+stage*BAL.sellStageK)*Math.pow(r.mult,BAL.sellExp))),set=rollSet(tier),sd=set?setDef(set):null,baseDmgPct=dmg/gearDamageReference();return{kind:"weapon",id:"w"+Date.now()+Math.random(),name:(sd?"《"+sd.name+"》 ":"")+r.name+" "+WEAPON_NAMES[Math.floor(Math.random()*WEAPON_NAMES.length)],icon:"⚔️",rarity:tier,dmg,baseDmg:dmg,baseDmgPct,dmgPct:baseDmgPct,value,baseValue:value,enhance:0,set,sockets:socketCount(tier),gems:[]}}
-  function genArmor(tier,stageRef){const r=RARITIES[tier],base=20+Math.floor((stageRef||1)*2.2),hp=Math.round(base*r.mult*(1+Math.random()*.3)),dr=Math.min(.5,.02*tier+Math.random()*.02),value=Math.max(5,Math.round(BAL.sellBase*(1+stage*BAL.sellStageK)*Math.pow(r.mult,BAL.sellExp))),set=rollSet(tier),sd=set?setDef(set):null,baseHpPct=hp/gearHpReference(undefined,stageRef||stage);return{kind:"armor",id:"a"+Date.now()+Math.random(),name:(sd?"《"+sd.name+"》 ":"")+r.name+" "+ARMOR_NAMES[Math.floor(Math.random()*ARMOR_NAMES.length)],icon:"🛡️",rarity:tier,hp,baseHp:hp,baseHpPct,hpPct:baseHpPct,dr,baseDr:dr,value,baseValue:value,enhance:0,set,sockets:socketCount(tier),gems:[]}}
+  function genWeapon(tier,stageRef){const r=RARITIES[tier],base=8+Math.floor((stageRef||1)*.6),dmg=Math.round(base*r.mult*(1+Math.random()*.3)),value=Math.max(5,Core.sellValue(stage,r.mult,0)),set=rollSet(tier),sd=set?setDef(set):null,baseDmgPct=dmg/gearDamageReference();return{kind:"weapon",id:"w"+Date.now()+Math.random(),name:(sd?"《"+sd.name+"》 ":"")+r.name+" "+WEAPON_NAMES[Math.floor(Math.random()*WEAPON_NAMES.length)],icon:"⚔️",rarity:tier,dmg,baseDmg:dmg,baseDmgPct,dmgPct:baseDmgPct,value,baseValue:value,enhance:0,set,sockets:socketCount(tier),gems:[]}}
+  function genArmor(tier,stageRef){const r=RARITIES[tier],base=20+Math.floor((stageRef||1)*2.2),hp=Math.round(base*r.mult*(1+Math.random()*.3)),dr=Math.min(.5,.02*tier+Math.random()*.02),value=Math.max(5,Core.sellValue(stage,r.mult,0)),set=rollSet(tier),sd=set?setDef(set):null,baseHpPct=hp/gearHpReference(undefined,stageRef||stage);return{kind:"armor",id:"a"+Date.now()+Math.random(),name:(sd?"《"+sd.name+"》 ":"")+r.name+" "+ARMOR_NAMES[Math.floor(Math.random()*ARMOR_NAMES.length)],icon:"🛡️",rarity:tier,hp,baseHp:hp,baseHpPct,hpPct:baseHpPct,dr,baseDr:dr,value,baseValue:value,enhance:0,set,sockets:socketCount(tier),gems:[]}}
   /* ================= NGỌC KHẢM (GEM SOCKET) ================= */
   const GEM_DEFS=[
     {key:"ruby",icon:"🔴",name:"Hồng Ngọc",stat:"dmg",label:"Sát thương",base:5},
@@ -1861,7 +1929,7 @@
     showToast("☠ "+def.name+"!");
   }
    function isMarketStage(s){return s%STAGES_PER_DUNGEON===STAGES_PER_DUNGEON-1&&s<MAX_STAGES&&!challengeMode}
-  function upgradeCost(kind){const lv={power,speed:speedLevel,health:healthLevel}[kind];return Math.max(1,Math.round(UPGRADE_BASE[kind]*Math.pow(1+UP_COST_PCT,lv)))}
+  function upgradeCost(kind){const lv={power,speed:speedLevel,health:healthLevel}[kind];return Core.upgradeCost(kind,lv)}
   const input={x:0,y:0,active:false}, player={x:0,y:0,r:18,hp:100,maxHp:100,mana:100,maxMana:100,manaRegen:4,lifesteal:0,speed:140,damage:16,range:250,rate:600,color:"#fff",invuln:0,flash:0,faceX:0,faceY:1,mods:null,timeStop:0,skillDisabled:0,buffTimer:0,buffDmgMult:1,buffRateMult:1,buffMoveExtra:0,buffInvuln:false,buffAuraRadius:0,buffAuraTick:0,goonBurst:0,goonTick:0,goonSpin:0};
   let mpGhostMode=false;
   function setMpGhostUI(on){
@@ -2046,8 +2114,8 @@
      const base=enemyProfiles[type],difficulty=1+Math.pow(stage,.72),bossTier=isBoss?Math.ceil(stage/STAGES_PER_DUNGEON):0;
     /* Trước đây sát thương boss nhân thêm theo MÁU TỐI ĐA của người chơi (1 + máu×0,0003×cấp boss) nên nâng máu không giúp được gì: từ ải ~110 boss đánh 1 phát là chết dù máu bao nhiêu. Đã bỏ. */
     const hpScale=1;
-    const _hm=Math.max(1,BAL.enemyHpA*Math.pow(stage,BAL.enemyHpB)),_dm=Math.max(1,BAL.enemyDmgA*Math.pow(stage,BAL.enemyDmgB));
-    const _bh=boss?Math.max(.0001,BAL.bossHpA*Math.pow(stage,BAL.bossHpB)):1,_bd=boss?Math.max(.0001,BAL.bossDmgA*Math.pow(stage,BAL.bossDmgB)):1;
+    const _hm=Core.enemyHpMult(stage),_dm=Core.enemyDmgMult(stage);
+    const _bh=Core.bossHpMult(stage,!!boss),_bd=Core.bossDmgMult(stage,!!boss);
      const data={...base,hp:Math.floor(base.hp*difficulty*_hm*_bh*(isBoss?(boss?1+bossTier*.28:2.4):1)),damage:Math.ceil(base.damage*_dm*_bd*(.8+difficulty*.18)*(isBoss?(boss?1+bossTier*.06:1.2):1)*hpScale),isBoss,hiddenBoss,bossTier,damageTakenMult:boss?0.2:hiddenBoss?0.7:1,damageOutMult:boss?1.0:hiddenBoss?1.2:1,freezeResist:isBoss,badEffectResist:isBoss,reflect:boss&&bossTier>=3,invulnHits:0,regenUsed:false,ultiResist:false,lifesteal:boss&&bossTier>=8?.03:0,teleportTimer:boss?15:Infinity,timeStopTimer:boss&&bossTier>=2?10:Infinity,blackHoleTimer:boss&&bossTier>=7?20:Infinity};
     if(hiddenBoss)data.r*=1.35;
     data.maxHp=data.hp;
@@ -2307,7 +2375,7 @@
   $("refresh-skills-btn")?.addEventListener("click",()=>{if(choosing||levelRefreshLeft<=0)return;levelRefreshLeft--;renderLevelChoices()});
   function skillEffect(i,j){
     if(i*20+j>=400){const x=EXTRA[i*20+j-400];return{label:x.label,apply:x.apply}}
-    const t=1+i*.05,p=b=>Math.max(1,Math.round(b*t*BAL.skillScale));
+    const t=1+i*.05,p=b=>Core.skillValue(b,t);
     switch(j){
       case 0:{const v=p(10);return{label:`+${v}% sát thương kỹ năng`,apply:m=>{m.skillDamage*=1+v/100}}}
       case 1:{const v=p(8);return{label:`+${v}% sát thương đòn đánh thường`,apply:m=>{m.damage*=1+v/100}}}
@@ -3264,7 +3332,7 @@
     }
   }
   let inBoom=false;
-  function killEnemy(e){if(!e.dead)logKill(e);e.dead=true;{const km=player.mods||{};if(km.killHeal&&player.hp>0){const h=player.maxHp*km.killHeal;player.hp=Math.min(player.maxHp,player.hp+h);if(fxOk('kh',.5))floatText(player.x,player.y-32,'+'+Math.round(h)+' HP','#7dff9a')}if(km.boom&&!inBoom){inBoom=true;for(const o of enemies){if(o===e||o.dead)continue;if(Math.hypot(o.x-e.x,o.y-e.y)<85)damageEnemy(o,player.damage*km.boom)}inBoom=false;addParticles(e.x,e.y,'#ff9a4d',18);addParticles(e.x,e.y,'#ffe277',8)}}kills++;const _g=Math.round(BAL.goldPerKill*(1+stage*BAL.goldStageK)*(player.mods?.gold||1));coins+=_g;if(_g>30)floatText(e.x,e.y-12,'+'+(_g-30)+'💰','#ffe277');gems+=e.isBoss?10:1;gainXP(e.isBoss?120:18);addParticles(e.x,e.y,e.color,18);drops.push({x:e.x,y:e.y,life:9,value:e.isBoss?35:6});rollLoot(e);stats.totalKills++;stats.totalGold+=_g;if(e.isBoss){stats.bossesKilled++;saveStats()}if(e.isBoss)showToast("Boss Dinh Hanh đã bị đánh bại! +30 vàng")}
+  function killEnemy(e){if(!e.dead)logKill(e);e.dead=true;{const km=player.mods||{};if(km.killHeal&&player.hp>0){const h=player.maxHp*km.killHeal;player.hp=Math.min(player.maxHp,player.hp+h);if(fxOk('kh',.5))floatText(player.x,player.y-32,'+'+Math.round(h)+' HP','#7dff9a')}if(km.boom&&!inBoom){inBoom=true;for(const o of enemies){if(o===e||o.dead)continue;if(Math.hypot(o.x-e.x,o.y-e.y)<85)damageEnemy(o,player.damage*km.boom)}inBoom=false;addParticles(e.x,e.y,'#ff9a4d',18);addParticles(e.x,e.y,'#ffe277',8)}}kills++;const _g=Math.round(Core.goldPerKill(stage)*(player.mods?.gold||1));coins+=_g;if(_g>30)floatText(e.x,e.y-12,'+'+(_g-30)+'💰','#ffe277');gems+=e.isBoss?10:1;gainXP(e.isBoss?120:18);addParticles(e.x,e.y,e.color,18);drops.push({x:e.x,y:e.y,life:9,value:e.isBoss?35:6});rollLoot(e);stats.totalKills++;stats.totalGold+=_g;if(e.isBoss){stats.bossesKilled++;saveStats()}if(e.isBoss)showToast("Boss Dinh Hanh đã bị đánh bại! +30 vàng")}
   function rollLoot(e){
     if(e.isBoss){const tier=Math.min(4,Math.floor(stage/200));const item=Math.random()<.5?genWeapon(rollRarity(tier),stage):genArmor(rollRarity(tier),stage);lootDrops.push({x:e.x,y:e.y,life:16,item});return}
     if(e.elite){const tier=rollRarity(Math.min(3,1+Math.floor(stage/250)));const item=Math.random()<.5?genWeapon(tier,stage):genArmor(tier,stage);lootDrops.push({x:e.x,y:e.y,life:16,item});return}
@@ -5349,7 +5417,7 @@
       const rarity=RARITIES[clamp(Math.floor(Number(it.rarity)||0),0,RARITIES.length-1)]||RARITIES[0];
       const stageFactor=1+Math.max(0,Number(stage)||1)*BAL.sellStageK;
       const enhanceFactor=1+Math.max(0,Number(it.enhance)||0)*0.25;
-      base=Math.max(base,Math.round(BAL.sellBase*stageFactor*Math.pow(rarity.mult,BAL.sellExp)*enhanceFactor));
+      base=Math.max(base,Core.sellValue(Math.max(0,Number(stage)||1),rarity.mult,Math.max(0,Number(it.enhance)||0)));
     }
     const gemValue=(it.gems||[]).reduce((a,g)=>a+(Number(g.value)||0),0);
     return Math.max(0,Math.round(base+gemValue));
