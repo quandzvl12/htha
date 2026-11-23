@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Hành Trình Anh Hùng (Rust/WASM)</title>
+<style>html,body,canvas{margin:0;padding:0;width:100%;height:100%;overflow:hidden;position:absolute;background:#14121f}</style>
+</head>
+<body>
+<canvas id="glcanvas" tabindex="1"></canvas>
+<!-- mq_js_bundle.js: trình tải của macroquad (CI tải về cạnh file này) -->
+<script src="mq_js_bundle.js"></script>
+<script>load("htha-game.wasm");</script>
+</body>
+</html>

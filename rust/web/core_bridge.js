@@ -1,6 +1,7 @@
-/* ===== HTHA CORE — lõi Rust/WASM (BƯỚC 1: công thức cân bằng) =====
+/* ===== HTHA CORE — lõi Rust/WASM (BƯỚC 1: công thức cân bằng · BƯỚC 2: hồ sơ + save theo nghề) =====
    Game luôn chạy được: ban đầu dùng bản JS dự phòng; khi htha_core.wasm tải xong VÀ
-   khớp bản JS trên các giá trị mẫu thì tự chuyển sang Rust. Lệch → giữ JS và báo ở console. */
+   khớp bản JS trên các giá trị mẫu thì tự chuyển sang Rust. Lệch/lỗi → giữ JS và báo ở console.
+   Hàm chuỗi/JSON (normalizeProfile, classSave*) trả null khi chưa có WASM → game dùng code JS gốc. */
 const Core=(()=>{
   const js={
     enemyHpMult:s=>Math.max(1,0.1244*Math.pow(s,1.2144)),
@@ -15,12 +16,34 @@ const Core=(()=>{
     floorOfStage:s=>(s-1)%10+1,
     rankIndex:d=>d===1?0:d<=20?1:d<=60?2:d<=120?3:d<=180?4:d<=240?5:d<=280?6:7,
     regionIndex:(d,rl,al)=>d===1?-1:Math.floor((d-2)/al)%rl,
-    aspectIndex:(d,al)=>d===1?-1:(d-2)%al
+    aspectIndex:(d,al)=>d===1?-1:(d-2)%al,
+    /* bước 2 */
+    profileXpForNext:l=>120+l*30,
+    profileLevelInfo:xp=>{let r=Math.max(0,Math.floor(Number(xp)||0)),level=1,need=120+level*30;
+      while(level<100&&r>=need){r-=need;level++;need=120+level*30}
+      return{level,progress:level>=100?0:r,need:level>=100?0:need}},
+    normalizeProfile:()=>null,
+    classSaveWrite:()=>null,
+    classSaveDelete:()=>null,
+    canSaves:()=>false
   };
   const KIND={power:0,speed:1,health:2};
   const api=Object.assign({backend:"js"},js);
+  const TE=typeof TextEncoder==="function"?new TextEncoder():null,TD=typeof TextDecoder==="function"?new TextDecoder():null;
+  function callJson(x,name,strs,extra){
+    const bufs=strs.map(s=>TE.encode(s)),ptrs=[];
+    try{
+      for(const b of bufs){const p=x.htha_alloc(b.length);ptrs.push(p);new Uint8Array(x.memory.buffer,p,b.length).set(b)}
+      const args=[];bufs.forEach((b,i)=>args.push(ptrs[i],b.length));
+      const code=x[name](...args,...(extra||[]));
+      const out=TD.decode(new Uint8Array(x.memory.buffer,x.htha_out_ptr(),x.htha_out_len()));
+      if(code!==0)throw new Error(out);
+      return JSON.parse(out)
+    }finally{bufs.forEach((b,i)=>{if(ptrs[i]!==undefined)x.htha_dealloc(ptrs[i],b.length)})}
+  }
   function wrap(x){
-    return {
+    const strOk=typeof x.htha_alloc==="function"&&!!TE&&!!TD&&x.memory&&typeof x.normalize_profile==="function";
+    const w={
       enemyHpMult:s=>x.enemy_hp_mult(s),
       enemyDmgMult:s=>x.enemy_dmg_mult(s),
       bossHpMult:(s,b)=>x.boss_hp_mult(s,b?1:0),
@@ -35,6 +58,19 @@ const Core=(()=>{
       regionIndex:(d,rl,al)=>x.region_index(d,rl,al),
       aspectIndex:(d,al)=>x.aspect_index(d,al)
     };
+    if(strOk){
+      w.profileXpForNext=l=>x.profile_xp_for_next_level(l);
+      w.profileLevelInfo=xp=>{const n=Number(xp)||0;return{level:x.profile_level(n),progress:x.profile_progress(n),need:x.profile_need(n)}};
+      w.normalizeProfile=(raw,fb,classKeys,now)=>{try{
+        return callJson(x,"normalize_profile",[JSON.stringify(raw===undefined?null:raw),fb?String(fb):"",JSON.stringify(classKeys)],[now])
+      }catch(e){console.warn("[HTHA] normalizeProfile lỗi, dùng JS:",e&&e.message);return null}};
+      w.classSaveWrite=(state,data)=>{try{return callJson(x,"class_save_write",[JSON.stringify(state),JSON.stringify(data)])}
+        catch(e){console.warn("[HTHA] classSaveWrite lỗi, dùng JS:",e&&e.message);return null}};
+      w.classSaveDelete=(state,key)=>{try{return callJson(x,"class_save_delete",[JSON.stringify(state),String(key)])}
+        catch(e){console.warn("[HTHA] classSaveDelete lỗi, dùng JS:",e&&e.message);return null}};
+      w.canSaves=()=>true;
+    }
+    return w;
   }
   function same(a,b){return a===b||Math.abs(a-b)<=1e-9*Math.max(1,Math.abs(b))}
   function parity(w){
@@ -50,6 +86,17 @@ const Core=(()=>{
     for(const b of [3,10,25.5,100])for(const t of [1,1.15,2.35])if(w.skillValue(b,t)!==js.skillValue(b,t))return false;
     for(let d=1;d<=300;d+=13)
       if(w.rankIndex(d)!==js.rankIndex(d)||w.regionIndex(d,20,16)!==js.regionIndex(d,20,16)||w.aspectIndex(d,16)!==js.aspectIndex(d,16))return false;
+    /* bước 2: cấp hồ sơ khớp JS; cổng chuỗi/JSON chạy đúng */
+    for(const xp of [0,149,150,500,5000,99999,1e7]){
+      const a=w.profileLevelInfo(xp),b=js.profileLevelInfo(xp);
+      if(a.level!==b.level||a.progress!==b.progress||a.need!==b.need)return false
+    }
+    if(w.canSaves()){
+      const p=w.normalizeProfile({totalXp:500,name:"  Q  "},"x",["warrior"],0);
+      if(!p||p.level!==3||p.levelXp!==170||p.name!=="Q")return false;
+      const s=w.classSaveWrite({last:{classKey:"a",savedAt:1},saves:{}},{classKey:"b",savedAt:2});
+      if(!s||s.last.classKey!=="b"||!s.saves.a)return false
+    }
     return true;
   }
   try{
@@ -58,7 +105,7 @@ const Core=(()=>{
         .then(buf=>WebAssembly.instantiate(buf,{}))
         .then(({instance})=>{
           const w=wrap(instance.exports);
-          if(parity(w)){Object.assign(api,w);api.backend="rust-wasm";console.info("[HTHA] lõi Rust/WASM đang chạy")}
+          if(parity(w)){Object.assign(api,w);api.backend="rust-wasm";console.info("[HTHA] lõi Rust/WASM đang chạy (v"+instance.exports.core_version()+")")}
           else console.warn("[HTHA] WASM lệch bản JS — giữ JS")
         }).catch(e=>console.info("[HTHA] dùng bản JS (không có WASM):",e&&e.message))
     }

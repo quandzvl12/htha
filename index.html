@@ -1,9 +1,10 @@
 <!doctype html>
 <html lang="vi">
 <head>
-<script>/* ===== HTHA CORE — lõi Rust/WASM (BƯỚC 1: công thức cân bằng) =====
+<script>/* ===== HTHA CORE — lõi Rust/WASM (BƯỚC 1: công thức cân bằng · BƯỚC 2: hồ sơ + save theo nghề) =====
    Game luôn chạy được: ban đầu dùng bản JS dự phòng; khi htha_core.wasm tải xong VÀ
-   khớp bản JS trên các giá trị mẫu thì tự chuyển sang Rust. Lệch → giữ JS và báo ở console. */
+   khớp bản JS trên các giá trị mẫu thì tự chuyển sang Rust. Lệch/lỗi → giữ JS và báo ở console.
+   Hàm chuỗi/JSON (normalizeProfile, classSave*) trả null khi chưa có WASM → game dùng code JS gốc. */
 const Core=(()=>{
   const js={
     enemyHpMult:s=>Math.max(1,0.1244*Math.pow(s,1.2144)),
@@ -18,12 +19,34 @@ const Core=(()=>{
     floorOfStage:s=>(s-1)%10+1,
     rankIndex:d=>d===1?0:d<=20?1:d<=60?2:d<=120?3:d<=180?4:d<=240?5:d<=280?6:7,
     regionIndex:(d,rl,al)=>d===1?-1:Math.floor((d-2)/al)%rl,
-    aspectIndex:(d,al)=>d===1?-1:(d-2)%al
+    aspectIndex:(d,al)=>d===1?-1:(d-2)%al,
+    /* bước 2 */
+    profileXpForNext:l=>120+l*30,
+    profileLevelInfo:xp=>{let r=Math.max(0,Math.floor(Number(xp)||0)),level=1,need=120+level*30;
+      while(level<100&&r>=need){r-=need;level++;need=120+level*30}
+      return{level,progress:level>=100?0:r,need:level>=100?0:need}},
+    normalizeProfile:()=>null,
+    classSaveWrite:()=>null,
+    classSaveDelete:()=>null,
+    canSaves:()=>false
   };
   const KIND={power:0,speed:1,health:2};
   const api=Object.assign({backend:"js"},js);
+  const TE=typeof TextEncoder==="function"?new TextEncoder():null,TD=typeof TextDecoder==="function"?new TextDecoder():null;
+  function callJson(x,name,strs,extra){
+    const bufs=strs.map(s=>TE.encode(s)),ptrs=[];
+    try{
+      for(const b of bufs){const p=x.htha_alloc(b.length);ptrs.push(p);new Uint8Array(x.memory.buffer,p,b.length).set(b)}
+      const args=[];bufs.forEach((b,i)=>args.push(ptrs[i],b.length));
+      const code=x[name](...args,...(extra||[]));
+      const out=TD.decode(new Uint8Array(x.memory.buffer,x.htha_out_ptr(),x.htha_out_len()));
+      if(code!==0)throw new Error(out);
+      return JSON.parse(out)
+    }finally{bufs.forEach((b,i)=>{if(ptrs[i]!==undefined)x.htha_dealloc(ptrs[i],b.length)})}
+  }
   function wrap(x){
-    return {
+    const strOk=typeof x.htha_alloc==="function"&&!!TE&&!!TD&&x.memory&&typeof x.normalize_profile==="function";
+    const w={
       enemyHpMult:s=>x.enemy_hp_mult(s),
       enemyDmgMult:s=>x.enemy_dmg_mult(s),
       bossHpMult:(s,b)=>x.boss_hp_mult(s,b?1:0),
@@ -38,6 +61,19 @@ const Core=(()=>{
       regionIndex:(d,rl,al)=>x.region_index(d,rl,al),
       aspectIndex:(d,al)=>x.aspect_index(d,al)
     };
+    if(strOk){
+      w.profileXpForNext=l=>x.profile_xp_for_next_level(l);
+      w.profileLevelInfo=xp=>{const n=Number(xp)||0;return{level:x.profile_level(n),progress:x.profile_progress(n),need:x.profile_need(n)}};
+      w.normalizeProfile=(raw,fb,classKeys,now)=>{try{
+        return callJson(x,"normalize_profile",[JSON.stringify(raw===undefined?null:raw),fb?String(fb):"",JSON.stringify(classKeys)],[now])
+      }catch(e){console.warn("[HTHA] normalizeProfile lỗi, dùng JS:",e&&e.message);return null}};
+      w.classSaveWrite=(state,data)=>{try{return callJson(x,"class_save_write",[JSON.stringify(state),JSON.stringify(data)])}
+        catch(e){console.warn("[HTHA] classSaveWrite lỗi, dùng JS:",e&&e.message);return null}};
+      w.classSaveDelete=(state,key)=>{try{return callJson(x,"class_save_delete",[JSON.stringify(state),String(key)])}
+        catch(e){console.warn("[HTHA] classSaveDelete lỗi, dùng JS:",e&&e.message);return null}};
+      w.canSaves=()=>true;
+    }
+    return w;
   }
   function same(a,b){return a===b||Math.abs(a-b)<=1e-9*Math.max(1,Math.abs(b))}
   function parity(w){
@@ -53,6 +89,17 @@ const Core=(()=>{
     for(const b of [3,10,25.5,100])for(const t of [1,1.15,2.35])if(w.skillValue(b,t)!==js.skillValue(b,t))return false;
     for(let d=1;d<=300;d+=13)
       if(w.rankIndex(d)!==js.rankIndex(d)||w.regionIndex(d,20,16)!==js.regionIndex(d,20,16)||w.aspectIndex(d,16)!==js.aspectIndex(d,16))return false;
+    /* bước 2: cấp hồ sơ khớp JS; cổng chuỗi/JSON chạy đúng */
+    for(const xp of [0,149,150,500,5000,99999,1e7]){
+      const a=w.profileLevelInfo(xp),b=js.profileLevelInfo(xp);
+      if(a.level!==b.level||a.progress!==b.progress||a.need!==b.need)return false
+    }
+    if(w.canSaves()){
+      const p=w.normalizeProfile({totalXp:500,name:"  Q  "},"x",["warrior"],0);
+      if(!p||p.level!==3||p.levelXp!==170||p.name!=="Q")return false;
+      const s=w.classSaveWrite({last:{classKey:"a",savedAt:1},saves:{}},{classKey:"b",savedAt:2});
+      if(!s||s.last.classKey!=="b"||!s.saves.a)return false
+    }
     return true;
   }
   try{
@@ -61,7 +108,7 @@ const Core=(()=>{
         .then(buf=>WebAssembly.instantiate(buf,{}))
         .then(({instance})=>{
           const w=wrap(instance.exports);
-          if(parity(w)){Object.assign(api,w);api.backend="rust-wasm";console.info("[HTHA] lõi Rust/WASM đang chạy")}
+          if(parity(w)){Object.assign(api,w);api.backend="rust-wasm";console.info("[HTHA] lõi Rust/WASM đang chạy (v"+instance.exports.core_version()+")")}
           else console.warn("[HTHA] WASM lệch bản JS — giữ JS")
         }).catch(e=>console.info("[HTHA] dùng bản JS (không có WASM):",e&&e.message))
     }
@@ -1329,18 +1376,19 @@ const Core=(()=>{
   let playerProfile={name:"Người chơi",avatar:"🧑‍🚀",totalXp:0,level:1,levelXp:0,totalRuns:0,bestStage:1,totalKills:0,playSeconds:0,history:[]};
   let profileRunStartedAt=0,profileRunXPStart=0,profileRunRecorded=true,profileSaveTimer=null,profileSaveKey=null,profileSaveSnapshot=null;
   function profileStorageKey(){return PROFILE_STORAGE_PREFIX+(currentAccount?encodeURIComponent(currentAccount):"guest")}
-  function profileXPForNextLevel(level){return 120+level*30}
-  function profileLevelInfo(totalXp){
-    let remaining=Math.max(0,Math.floor(Number(totalXp)||0)),level=1,need=profileXPForNextLevel(level);
-    while(level<100&&remaining>=need){remaining-=need;level++;need=profileXPForNextLevel(level)}
-    return{level,progress:level>=100?0:remaining,need:level>=100?0:need}
-  }
+  function profileXPForNextLevel(level){return Core.profileXpForNext(level)}
+  function profileLevelInfo(totalXp){return Core.profileLevelInfo(totalXp)}
   function escapeProfileHTML(value){return String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
   function cleanProfileName(value,fallback){
     const name=String(value||"").replace(/[\u0000-\u001f\u007f<>]/g,"").replace(/\s+/g," ").trim().slice(0,20);
     return name||(String(fallback||"Người chơi").slice(0,20)||"Người chơi")
   }
+  /* BƯỚC 2: chuẩn hóa hồ sơ bằng Rust; chưa có WASM / lỗi → dùng bản JS gốc bên dưới */
   function normalizePlayerProfile(raw,fallbackName){
+    const r=Core.normalizeProfile(raw,fallbackName,Object.keys(classes),Date.now());
+    return r||normalizePlayerProfileJS(raw,fallbackName)
+  }
+  function normalizePlayerProfileJS(raw,fallbackName){
     raw=raw&&typeof raw==="object"?raw:{};
     const totalXp=Math.max(0,Math.floor(Number(raw.totalXp)||0)),info=profileLevelInfo(totalXp);
     const history=(Array.isArray(raw.history)?raw.history:[]).slice(0,20).map(item=>{
@@ -1518,7 +1566,7 @@ const Core=(()=>{
     return out;
   }
   function getClassSave(k){return allClassSaves()[k]||null}
-  function writeClassSave(data){
+  function writeClassSaveJS(data){
     if(currentAccount){
       const ac=loadAccounts(),rec=ac[currentAccount]||(ac[currentAccount]={password:""});
       const prev=rec.save;
@@ -1533,7 +1581,7 @@ const Core=(()=>{
       localStorage.setItem("hanhTrinhAnhHungSave",JSON.stringify(data));
     }
   }
-  function deleteClassSave(k){
+  function deleteClassSaveJS(k){
     const newest=m=>Object.values(m).filter(x=>x&&x.classKey).sort((a,b)=>(b.savedAt||0)-(a.savedAt||0))[0]||null;
     if(currentAccount){
       const ac=loadAccounts(),r=ac[currentAccount];if(!r)return;
@@ -1544,6 +1592,36 @@ const Core=(()=>{
       const m=_guestMap();delete m[k];let g=_guestLast();
       if(g&&g.classKey===k){g=newest(m);if(g){delete m[g.classKey];localStorage.setItem("hanhTrinhAnhHungSave",JSON.stringify(g))}else localStorage.removeItem("hanhTrinhAnhHungSave")}
       localStorage.setItem(GUEST_SAVES_KEY,JSON.stringify(m));
+    }
+    reloadSaveFromStorage();
+  }
+  /* BƯỚC 2: logic ghi/xóa save theo nghề chạy bằng Rust; JS chỉ đọc/ghi localStorage. Lỗi → bản JS gốc (…JS). */
+  function writeClassSave(data){
+    if(!Core.canSaves())return writeClassSaveJS(data);
+    if(currentAccount){
+      const ac=loadAccounts(),rec=ac[currentAccount]||(ac[currentAccount]={password:""});
+      const r=Core.classSaveWrite({last:rec.save||null,saves:rec.saves||{}},data);
+      if(!r)return writeClassSaveJS(data);
+      rec.save=r.last;rec.saves=r.saves;saveAccounts(ac);
+    }else{
+      const r=Core.classSaveWrite({last:_guestLast(),saves:_guestMap()},data);
+      if(!r)return writeClassSaveJS(data);
+      localStorage.setItem(GUEST_SAVES_KEY,JSON.stringify(r.saves));
+      localStorage.setItem("hanhTrinhAnhHungSave",JSON.stringify(r.last));
+    }
+  }
+  function deleteClassSave(k){
+    if(!Core.canSaves())return deleteClassSaveJS(k);
+    if(currentAccount){
+      const ac=loadAccounts(),rec=ac[currentAccount];if(!rec)return;
+      const r=Core.classSaveDelete({last:rec.save||null,saves:rec.saves||{}},k);
+      if(!r)return deleteClassSaveJS(k);
+      rec.save=r.last;rec.saves=r.saves;saveAccounts(ac);
+    }else{
+      const r=Core.classSaveDelete({last:_guestLast(),saves:_guestMap()},k);
+      if(!r)return deleteClassSaveJS(k);
+      localStorage.setItem(GUEST_SAVES_KEY,JSON.stringify(r.saves));
+      if(r.last)localStorage.setItem("hanhTrinhAnhHungSave",JSON.stringify(r.last));else localStorage.removeItem("hanhTrinhAnhHungSave");
     }
     reloadSaveFromStorage();
   }
@@ -2659,9 +2737,9 @@ const Core=(()=>{
     const t=gameTime+s.x*.01;
     if(s.kind==="servant"){
       ctx.save();ctx.translate(s.x,s.y);
-      if(s.label==="Artoria")drawArtoria(s,t);
-      else if(s.label==="Gilgamesh")drawGilgamesh(s,t);
-      else if(s.label==="Enkidu")drawEnkidu(s,t);
+      if(s.label==="Artoria")drawServantModel(s,t,drawArtoria);
+      else if(s.label==="Gilgamesh")drawServantModel(s,t,drawGilgamesh);
+      else if(s.label==="Enkidu")drawServantModel(s,t,drawEnkidu);
       /* HP bar + life timer */
       const bw=46,bh=4,bx=-bw/2,by=s.r+10;
       ctx.fillStyle="#22182b";ctx.fillRect(bx,by,bw,bh);
@@ -2671,6 +2749,40 @@ const Core=(()=>{
       ctx.restore();return;
     }
     drawEnemy(s);ctx.save();ctx.translate(s.x,s.y);ctx.strokeStyle="#6fffb0";ctx.lineWidth=2;ctx.beginPath();ctx.arc(0,0,s.r+5,0,TAU);ctx.stroke();ctx.restore();
+  }
+  /* ===== BƯỚC 3 — HIỆU NĂNG: bộ nhớ đệm sprite cho Anh Linh (Artoria / Gilgamesh / Enkidu) =====
+     Đo thực tế: mỗi Anh Linh tốn 2.000–6.000 lệnh canvas MỖI KHUNG (kèm hàng trăm lần bật shadowBlur),
+     kể cả ở Q0. Mô hình chỉ phụ thuộc (nhãn, r, t, tia gate) nên vẽ vào canvas phụ ~SV_HZ lần/giây,
+     các khung còn lại chỉ drawImage. Các Anh Linh được so le thời điểm làm mới để không dồn tải vào một khung.
+     Sprite có gốc là số nguyên điểm ảnh thiết bị và được căn vào lưới điểm ảnh khi vẽ → nét không bị mờ.
+     Trạng thái hiển thị duy nhất phụ thuộc chiêu cuối là tia của Gilgamesh (np="gate" và npT<.4) → nằm trong chữ ký.
+     Tắt bằng localStorage htahNoSvCache=1. */
+  const SV_HZ=15,SV_L=-72,SV_T=-84,SV_W=144,SV_H=138;   /* vùng vẽ đo được (r=20): x −57…56, y −70…39, cộng lề cho viền sáng/bóng mờ */
+  let _svOff=false;try{_svOff=localStorage.getItem("htahNoSvCache")==="1"}catch(_){}
+  function _svGate(c){try{const sd=Object.getOwnPropertyDescriptor(CanvasRenderingContext2D.prototype,"shadowBlur");
+    Object.defineProperty(c,"shadowBlur",{get(){return sd.get.call(c)},set(v){sd.set.call(c,Q>=2?v:0)},configurable:true})}catch(_){}}
+  function drawServantModel(s,t,fn){
+    if(_svOff||typeof ctx.getTransform!=="function"){fn(s,t);return}
+    const m=ctx.getTransform();
+    if(m.b||m.c||!(m.a>0)||Math.abs(m.a-m.d)>1e-6){fn(s,t);return}      /* có xoay/méo/không đều → vẽ trực tiếp như cũ */
+    const dev=Math.round(m.a*1000)/1000,k=s.r/20,
+      ox=Math.ceil(-SV_L*k*dev),oy=Math.ceil(-SV_T*k*dev),
+      pw=Math.max(1,ox+Math.ceil((SV_L+SV_W)*k*dev)),ph=Math.max(1,oy+Math.ceil((SV_T+SV_H)*k*dev)),
+      fl=(s.np==="gate"&&s.npT<.4)?1:0;
+    let sp=s._sv;
+    if(!sp||sp.pw!==pw||sp.ph!==ph||sp.dev!==dev||sp.fn!==fn||sp.fl!==fl){
+      const cv=document.createElement("canvas");cv.width=pw;cv.height=ph;const c=cv.getContext("2d");_svGate(c);
+      let h=0;for(const ch of String(s.label||""))h=(h*31+ch.charCodeAt(0))>>>0;
+      sp=s._sv={cv,c,pw,ph,dev,fn,fl,t0:-1e9,stag:(h%4)/(4*SV_HZ)};
+    }
+    if(gameTime-sp.t0>=1/SV_HZ||gameTime<sp.t0){
+      const main=ctx;ctx=sp.c;
+      try{sp.c.setTransform(1,0,0,1,0,0);sp.c.clearRect(0,0,pw,ph);
+        sp.c.setTransform(dev,0,0,dev,ox,oy);fn(s,t)}
+      finally{ctx=main}
+      sp.t0=gameTime-sp.stag;
+    }
+    ctx.save();ctx.setTransform(1,0,0,1,Math.round(m.e)-ox,Math.round(m.f)-oy);ctx.drawImage(sp.cv,0,0);ctx.restore();
   }
   /* ======================================================
      SERVANT MODELS — Artoria / Gilgamesh / Enkidu

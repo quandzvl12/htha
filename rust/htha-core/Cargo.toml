@@ -7,3 +7,6 @@ description = "Hành Trình Anh Hùng - lõi logic game bằng Rust (bước 1: 
 [lib]
 # cdylib -> htha_core.wasm cho WebView; rlib -> test native + dùng lại ở các bước sau
 crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }

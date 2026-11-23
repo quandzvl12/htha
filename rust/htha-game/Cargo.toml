@@ -1,0 +1,23 @@
+[package]
+name = "htha-game"
+version = "0.1.0"
+edition = "2021"
+description = "Hành Trình Anh Hùng - bản Rust thuần (macroquad): chạy desktop, WebAssembly, Android, iOS"
+
+[dependencies]
+htha-core = { path = "../htha-core" }
+# tắt "audio" để không cần thư viện ALSA khi build; âm thanh sẽ thêm ở bước sau bằng kiểu khác nếu cần
+macroquad = { version = "0.4", default-features = false }
+
+# cho cargo-quad-apk (Android)
+[package.metadata.android]
+package_name = "com.tkdunglan8.htha"
+label = "Hành Trình Anh Hùng (Rust)"
+assets = "assets"
+android_version = 34
+target_sdk_version = 34
+min_sdk_version = 24
+build_targets = ["armv7-linux-androideabi", "aarch64-linux-android"]
+[package.metadata.android.activity_attributes]
+"android:screenOrientation" = "portrait"
+"android:exported" = "true"

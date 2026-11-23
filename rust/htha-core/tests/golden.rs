@@ -63,7 +63,7 @@ fn dungeon_names_and_ranks() {
 
 #[test]
 fn ffi_layer_matches_core() {
-    assert_eq!(ffi::core_version(), 1);
+    assert_eq!(ffi::core_version(), 2);
     assert_eq!(ffi::upgrade_cost(0, 10.0), b::upgrade_cost(0, 10.0));
     assert_eq!(ffi::boss_hp_mult(100.0, 1), b::boss_hp_mult(100.0, true));
     assert_eq!(ffi::boss_hp_mult(100.0, 0), 1.0);

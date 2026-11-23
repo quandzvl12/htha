@@ -1,5 +1,5 @@
 [workspace]
-members = ["htha-core"]
+members = ["htha-core", "htha-game"]
 resolver = "2"
 
 [profile.release]
