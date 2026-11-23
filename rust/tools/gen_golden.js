@@ -20,7 +20,11 @@ const upgradeCost=(kind,lv)=>Math.max(1,Math.round(UPGRADE_BASE[kind]*Math.pow(1
 const p=(b,t)=>Math.max(1,Math.round(b*t*BAL.skillScale));
 // ----------------------------------
 
-const f = (x) => { const s = String(x); return /[.e]/.test(s) ? s : s + ".0"; };
+const f = (x) => {
+  const n = Number(x.toPrecision(15));
+  const s = String(n);
+  return /[.e]/.test(s) ? s : s + ".0";
+}; 
 const fa = (name, arr) => `pub const ${name}: &[f64] = &[${arr.map(f).join(", ")}];\n`;
 const ia = (name, arr) => `pub const ${name}: &[i32] = &[${arr.join(", ")}];\n`;
 
