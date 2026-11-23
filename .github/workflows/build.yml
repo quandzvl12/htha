@@ -19,6 +19,18 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup target add wasm32-unknown-unknown
+      - name: Kiểm tra bảng dữ liệu & dữ liệu đối chiếu không bị lệch so với index.html
+        run: |
+          node rust/tools/gen_data.js | diff - rust/htha-core/src/data_gen.rs
+          node rust/tools/gen_golden.js | diff - rust/htha-core/tests/golden_data.rs
+          node rust/tools/gen_golden2.js
+          npm i --no-save jsdom@24
+          node rust/tools/gen_golden3.js
+          git diff --exit-code -- rust/htha-core/tests
+      - name: Kiểm thử sprite cache Anh Linh bằng canvas thật (so từng điểm ảnh)
+        run: |
+          npm i --no-save @napi-rs/canvas
+          node rust/tools/test_servant_cache.js
       - name: Test lõi Rust (đối chiếu JS gốc)
         working-directory: rust
         run: cargo test --release
@@ -32,6 +44,36 @@ jobs:
         with:
           name: htha-core-wasm
           path: htha_core.wasm
+
+  # BƯỚC 4a: bản game Rust thuần (macroquad) — kiểm thử lõi + build WebAssembly + kiểm tra trình tải
+  rust-game:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cài Rust + target wasm32
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add wasm32-unknown-unknown
+      - name: Test toàn bộ workspace (đối chiếu JS + mô phỏng)
+        working-directory: rust
+        run: cargo test --release --workspace
+      - name: Build bản desktop (kiểm tra biên dịch)
+        working-directory: rust
+        run: cargo build --release -p htha-game
+      - name: Build WebAssembly
+        working-directory: rust
+        run: cargo build --release -p htha-game --target wasm32-unknown-unknown
+      - name: Đóng gói bản web
+        run: |
+          mkdir -p dist
+          cp rust/target/wasm32-unknown-unknown/release/htha-game.wasm dist/
+          cp rust/htha-game/web/index.html dist/
+          curl -fsSL -o dist/mq_js_bundle.js https://raw.githubusercontent.com/not-fl3/macroquad/master/js/mq_js_bundle.js
+          node rust/tools/check_wasm_imports.js dist/htha-game.wasm dist/mq_js_bundle.js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: htha-game-web
+          path: dist
 
   android:
     needs: wasm
